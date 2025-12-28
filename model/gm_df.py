@@ -475,9 +475,10 @@ class GMDF_Detector(nn.Module):
         )
         self.clip_model.float()  # Use float32 for training
         
-        # Unfreeze CLIP backbone (per user checklist for better convergence)
+        # Freeze/Unfreeze CLIP backbone based on config
+        # Freezing is recommended to preserve pretrained features
         for param in self.clip_model.parameters():
-            param.requires_grad = True
+            param.requires_grad = not config.freeze_backbone
         
         # Get vision transformer
         self.vision_transformer = self.clip_model.visual
@@ -652,6 +653,57 @@ class GMDF_Detector(nn.Module):
         
         return cls_features, x, layer_features, cls_token_out
     
+    def _compute_domain_alignment_loss(
+        self,
+        features: torch.Tensor,  # (B, D)
+        domain_ids: torch.Tensor,  # (B,)
+    ) -> torch.Tensor:
+        """
+        Compute Domain Alignment Loss using Maximum Mean Discrepancy (MMD).
+        
+        Aligns feature distributions across different domains to learn 
+        domain-invariant representations.
+        
+        MMD(P, Q) = ||μ_P - μ_Q||² + ||Σ_P - Σ_Q||_F
+        
+        For computational efficiency, we use a simplified version:
+        L_dal = Σ_{d1 ≠ d2} ||μ_{d1} - μ_{d2}||²
+        
+        Args:
+            features: Visual features (B, D)
+            domain_ids: Domain indices (B,)
+        
+        Returns:
+            loss_dal: Scalar loss
+        """
+        unique_domains = domain_ids.unique()
+        
+        # Need at least 2 domains for alignment
+        if len(unique_domains) < 2:
+            return torch.tensor(0.0, device=features.device, requires_grad=True)
+        
+        # Compute mean features per domain
+        domain_means = []
+        for d in unique_domains:
+            mask = domain_ids == d
+            if mask.sum() > 0:
+                domain_mean = features[mask].mean(dim=0)  # (D,)
+                domain_means.append(domain_mean)
+        
+        # Compute pairwise MMD (simplified: mean distance)
+        loss = torch.tensor(0.0, device=features.device)
+        count = 0
+        for i in range(len(domain_means)):
+            for j in range(i + 1, len(domain_means)):
+                # L2 distance between means
+                loss = loss + F.mse_loss(domain_means[i], domain_means[j])
+                count += 1
+        
+        if count > 0:
+            loss = loss / count
+        
+        return loss
+    
     def forward(
         self,
         images: torch.Tensor,
@@ -724,16 +776,23 @@ class GMDF_Detector(nn.Module):
             loss_sis = F.cross_entropy(logits, batch_labels)
             outputs["loss_sis"] = loss_sis
             
+            # Domain Alignment Loss (L_dal) using MMD
+            # Encourages domain-invariant feature learning
+            loss_dal = self._compute_domain_alignment_loss(visual_features, domain_ids)
+            outputs["loss_dal"] = loss_dal
+            
             # Clamp individual losses to prevent NaN propagation
             loss_cls = torch.clamp(loss_cls, min=0.0, max=100.0)
             loss_mim = torch.clamp(loss_mim, min=0.0, max=100.0)
             loss_sis = torch.clamp(loss_sis, min=0.0, max=100.0)
+            loss_dal = torch.clamp(loss_dal, min=0.0, max=100.0)
             
-            # Total loss (Eq.14)
+            # Total loss (Eq.14 + L_dal)
             loss_total = (
                 loss_cls + 
                 self.config.lambda_mim * loss_mim + 
-                self.config.lambda_sis * loss_sis
+                self.config.lambda_sis * loss_sis +
+                self.config.lambda_dal * loss_dal
             )
             outputs["loss_total"] = loss_total
         

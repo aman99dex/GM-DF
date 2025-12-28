@@ -312,6 +312,7 @@ class MAMLTrainer:
             "loss_cls_B": outputs_B["loss_cls"].item(),
             "loss_mim_B": outputs_B["loss_mim"].item(),
             "loss_sis_B": outputs_B["loss_sis"].item(),
+            "loss_dal_B": outputs_B.get("loss_dal", torch.tensor(0.0)).item(),
             "loss_total_B": outputs_B["loss_total"].item(),
         }
         

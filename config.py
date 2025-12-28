@@ -54,8 +54,12 @@ class GMDFConfig:
     weight_decay: float = 1e-4
     
     # === Loss Weights ===
-    lambda_mim: float = 1.0  # Weight for L_mim
-    lambda_sis: float = 1.0  # Weight for L_sis (contrastive)
+    lambda_mim: float = 0.5  # Weight for L_mim (reconstruction)
+    lambda_sis: float = 0.5  # Weight for L_sis (contrastive)
+    lambda_dal: float = 0.1  # Weight for L_dal (domain alignment) - NEW
+    
+    # === Training Strategy ===
+    freeze_backbone: bool = True  # Freeze CLIP backbone (standard practice)
     
     # === Domain Names (for prompts) ===
     domain_names: Tuple[str, ...] = (
