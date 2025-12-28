@@ -1,0 +1,80 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+ENV/
+env/
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Logs and databases
+*.log
+*.sqlite3
+*.db
+
+# Model checkpoints and outputs
+checkpoints/
+logs/
+runs/
+*.pt
+*.pth
+*.ckpt
+!requirements.txt
+
+# Data (user should add their own)
+data/raw/
+data/processed/
+datasets/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# PDF and large files (optional - remove if you want to include)
+# *.pdf
+
+# Temporary files
+tmp/
+temp/
+*.tmp

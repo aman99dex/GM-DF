@@ -1,0 +1,26 @@
+# GM-DF: Generalized Multi-Scenario Deepfake Detection
+# Core dependencies
+torch>=2.0.0
+torchvision>=0.15.0
+numpy>=1.24.0
+
+# CLIP model
+git+https://github.com/openai/CLIP.git
+
+# Vision transformers
+timm>=0.9.0
+
+# Image processing
+Pillow>=9.0.0
+opencv-python>=4.7.0
+
+# Face detection (for preprocessing)
+# retinaface-pytorch>=0.0.8
+
+# Utilities
+tqdm>=4.65.0
+tensorboard>=2.12.0
+pyyaml>=6.0
+
+# Testing
+pytest>=7.0.0
