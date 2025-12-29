@@ -17,6 +17,7 @@ import os
 import copy
 import random
 import argparse
+import math
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from collections import defaultdict
@@ -27,6 +28,10 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
+import csv
+import matplotlib
+matplotlib.use('Agg')  # Non-interactive backend for saving plots
+import matplotlib.pyplot as plt
 
 from config import GMDFConfig
 from model.gm_df import GMDF_Detector, build_model
@@ -46,6 +51,53 @@ try:
     UTILS_AVAILABLE = True
 except ImportError:
     UTILS_AVAILABLE = False
+
+
+class WarmupCosineScheduler:
+    """
+    Learning rate scheduler with linear warmup followed by cosine annealing.
+    
+    Warmup prevents early gradient explosions and helps stabilize training.
+    """
+    
+    def __init__(
+        self,
+        optimizer: torch.optim.Optimizer,
+        warmup_epochs: int,
+        total_epochs: int,
+        min_lr: float = 1e-7,
+    ):
+        self.optimizer = optimizer
+        self.warmup_epochs = warmup_epochs
+        self.total_epochs = total_epochs
+        self.min_lr = min_lr
+        self.base_lrs = [group['lr'] for group in optimizer.param_groups]
+        self.current_epoch = 0
+    
+    def step(self):
+        """Update learning rate based on current epoch."""
+        self.current_epoch += 1
+        for i, param_group in enumerate(self.optimizer.param_groups):
+            if self.current_epoch <= self.warmup_epochs:
+                # Linear warmup: 10% to 100% of base LR
+                warmup_factor = 0.1 + 0.9 * (self.current_epoch / self.warmup_epochs)
+                new_lr = self.base_lrs[i] * warmup_factor
+            else:
+                # Cosine annealing after warmup
+                progress = (self.current_epoch - self.warmup_epochs) / (self.total_epochs - self.warmup_epochs)
+                new_lr = self.min_lr + 0.5 * (self.base_lrs[i] - self.min_lr) * (1 + math.cos(math.pi * progress))
+            param_group['lr'] = new_lr
+    
+    def get_last_lr(self):
+        """Get current learning rates."""
+        return [group['lr'] for group in self.optimizer.param_groups]
+    
+    def state_dict(self):
+        return {'current_epoch': self.current_epoch, 'base_lrs': self.base_lrs}
+    
+    def load_state_dict(self, state_dict):
+        self.current_epoch = state_dict['current_epoch']
+        self.base_lrs = state_dict['base_lrs']
 
 
 class MAMLTrainer:
@@ -131,11 +183,14 @@ class MAMLTrainer:
             weight_decay=config.weight_decay,
         )
         
-        # Learning rate scheduler
-        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        # Learning rate scheduler with warmup (5 epochs warmup)
+        warmup_epochs = 5
+        self.scheduler = WarmupCosineScheduler(
             self.outer_optimizer,
-            T_max=config.epochs,
+            warmup_epochs=warmup_epochs,
+            total_epochs=config.epochs,
         )
+        print(f"[*] Using warmup scheduler: {warmup_epochs} warmup epochs")
         
         # Logging
         self.log_dir = Path(log_dir)
@@ -145,6 +200,18 @@ class MAMLTrainer:
         # Training state
         self.global_step = 0
         self.best_val_auc = 0.0
+        
+        # === Training history for graphs ===
+        self.history = {
+            'epoch': [],
+            'train_loss': [],
+            'val_loss': [],
+            'val_accuracy': [],
+            'val_error': [],  # 1 - accuracy
+            'val_auc': [],
+            'val_eer': [],
+            'learning_rate': [],
+        }
     
     def _supports_amp(self) -> bool:
         """Check if device supports AMP."""
@@ -571,7 +638,7 @@ class MAMLTrainer:
         save_dir: str = "./checkpoints",
     ):
         """
-        Full training loop.
+        Full training loop with validation monitoring and convergence graphs.
         
         Args:
             train_loader: Training dataloader
@@ -585,9 +652,14 @@ class MAMLTrainer:
         save_dir = Path(save_dir)
         save_dir.mkdir(parents=True, exist_ok=True)
         
+        # CSV file for history
+        csv_path = self.log_dir / "training_history.csv"
+        
         for epoch in range(1, num_epochs + 1):
             print(f"\n{'='*50}")
             print(f"Epoch {epoch}/{num_epochs}")
+            current_lr = self.scheduler.get_last_lr()[0]
+            print(f"Learning Rate: {current_lr:.2e}")
             print(f"{'='*50}")
             
             # Train
@@ -600,6 +672,22 @@ class MAMLTrainer:
             
             # Update scheduler
             self.scheduler.step()
+            
+            # === Update history ===
+            self.history['epoch'].append(epoch)
+            self.history['train_loss'].append(train_losses.get('loss_total_B', 0.0))
+            self.history['val_loss'].append(val_metrics['val_loss'])
+            self.history['val_accuracy'].append(val_metrics['val_accuracy'])
+            self.history['val_error'].append(1.0 - val_metrics['val_accuracy'])
+            self.history['val_auc'].append(val_metrics['val_auc'])
+            self.history['val_eer'].append(val_metrics['val_eer'])
+            self.history['learning_rate'].append(current_lr)
+            
+            # === Save history to CSV ===
+            self._save_history_csv(csv_path)
+            
+            # === Generate and save graphs ===
+            self._save_training_graphs()
             
             # Save best model
             if val_metrics["val_auc"] > self.best_val_auc:
@@ -618,8 +706,134 @@ class MAMLTrainer:
                     val_metrics,
                 )
         
+        # === Final summary ===
+        self._print_convergence_summary()
         print(f"\n[*] Training complete! Best Val AUC: {self.best_val_auc:.4f}")
         self.writer.close()
+    
+    def _save_history_csv(self, csv_path: Path):
+        """Save training history to CSV file."""
+        with open(csv_path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(self.history.keys())
+            rows = zip(*self.history.values())
+            writer.writerows(rows)
+        print(f"[*] History saved to {csv_path}")
+    
+    def _save_training_graphs(self):
+        """Generate and save training graphs."""
+        epochs = self.history['epoch']
+        
+        if len(epochs) < 1:
+            return
+        
+        # === Graph 1: Epoch vs Validation Accuracy ===
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(epochs, self.history['val_accuracy'], 'b-o', label='Val Accuracy', linewidth=2, markersize=4)
+        ax.set_xlabel('Epoch', fontsize=12)
+        ax.set_ylabel('Accuracy', fontsize=12)
+        ax.set_title('Epoch vs Validation Accuracy', fontsize=14, fontweight='bold')
+        ax.legend(loc='lower right')
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim([0, 1])
+        
+        # Mark best accuracy
+        best_acc_idx = max(range(len(self.history['val_accuracy'])), 
+                          key=lambda i: self.history['val_accuracy'][i])
+        best_acc = self.history['val_accuracy'][best_acc_idx]
+        best_epoch = epochs[best_acc_idx]
+        ax.axvline(x=best_epoch, color='green', linestyle='--', alpha=0.7, label=f'Best: Epoch {best_epoch}')
+        ax.scatter([best_epoch], [best_acc], color='green', s=100, zorder=5)
+        ax.annotate(f'Best: {best_acc:.4f}', xy=(best_epoch, best_acc), 
+                   xytext=(best_epoch + 1, best_acc - 0.05), fontsize=10)
+        
+        plt.tight_layout()
+        plt.savefig(self.log_dir / 'epoch_vs_accuracy.png', dpi=150)
+        plt.close()
+        
+        # === Graph 2: Epoch vs Validation Error ===
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(epochs, self.history['val_error'], 'r-o', label='Val Error (1 - Acc)', linewidth=2, markersize=4)
+        ax.set_xlabel('Epoch', fontsize=12)
+        ax.set_ylabel('Error Rate', fontsize=12)
+        ax.set_title('Epoch vs Validation Error', fontsize=14, fontweight='bold')
+        ax.legend(loc='upper right')
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim([0, 1])
+        
+        # Mark best (lowest) error
+        best_err_idx = min(range(len(self.history['val_error'])), 
+                          key=lambda i: self.history['val_error'][i])
+        best_err = self.history['val_error'][best_err_idx]
+        best_epoch = epochs[best_err_idx]
+        ax.axvline(x=best_epoch, color='green', linestyle='--', alpha=0.7)
+        ax.scatter([best_epoch], [best_err], color='green', s=100, zorder=5)
+        ax.annotate(f'Best: {best_err:.4f}', xy=(best_epoch, best_err), 
+                   xytext=(best_epoch + 1, best_err + 0.05), fontsize=10)
+        
+        plt.tight_layout()
+        plt.savefig(self.log_dir / 'epoch_vs_error.png', dpi=150)
+        plt.close()
+        
+        # === Graph 3: Training & Validation Loss ===
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(epochs, self.history['train_loss'], 'b-o', label='Train Loss', linewidth=2, markersize=4)
+        ax.plot(epochs, self.history['val_loss'], 'r-o', label='Val Loss', linewidth=2, markersize=4)
+        ax.set_xlabel('Epoch', fontsize=12)
+        ax.set_ylabel('Loss', fontsize=12)
+        ax.set_title('Epoch vs Loss', fontsize=14, fontweight='bold')
+        ax.legend(loc='upper right')
+        ax.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig(self.log_dir / 'epoch_vs_loss.png', dpi=150)
+        plt.close()
+        
+        # === Graph 4: Learning Rate Schedule ===
+        fig, ax = plt.subplots(figsize=(10, 4))
+        ax.plot(epochs, self.history['learning_rate'], 'g-o', linewidth=2, markersize=4)
+        ax.set_xlabel('Epoch', fontsize=12)
+        ax.set_ylabel('Learning Rate', fontsize=12)
+        ax.set_title('Learning Rate Schedule (with Warmup)', fontsize=14, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        ax.set_yscale('log')
+        
+        plt.tight_layout()
+        plt.savefig(self.log_dir / 'learning_rate_schedule.png', dpi=150)
+        plt.close()
+        
+        print(f"[*] Graphs saved to {self.log_dir}")
+    
+    def _print_convergence_summary(self):
+        """Print summary of best convergence point."""
+        if not self.history['epoch']:
+            return
+        
+        # Find best epoch based on different metrics
+        best_acc_idx = max(range(len(self.history['val_accuracy'])), 
+                          key=lambda i: self.history['val_accuracy'][i])
+        best_auc_idx = max(range(len(self.history['val_auc'])), 
+                          key=lambda i: self.history['val_auc'][i])
+        best_loss_idx = min(range(len(self.history['val_loss'])), 
+                           key=lambda i: self.history['val_loss'][i])
+        
+        print("\n" + "="*60)
+        print("CONVERGENCE SUMMARY")
+        print("="*60)
+        print(f"Best Validation Accuracy: {self.history['val_accuracy'][best_acc_idx]:.4f} at Epoch {self.history['epoch'][best_acc_idx]}")
+        print(f"Best Validation AUC:      {self.history['val_auc'][best_auc_idx]:.4f} at Epoch {self.history['epoch'][best_auc_idx]}")
+        print(f"Best Validation Loss:     {self.history['val_loss'][best_loss_idx]:.4f} at Epoch {self.history['epoch'][best_loss_idx]}")
+        print("="*60)
+        
+        # Save to file
+        summary_path = self.log_dir / "best_convergence.txt"
+        with open(summary_path, 'w') as f:
+            f.write("CONVERGENCE SUMMARY\n")
+            f.write("="*40 + "\n")
+            f.write(f"Best Accuracy: {self.history['val_accuracy'][best_acc_idx]:.4f} @ Epoch {self.history['epoch'][best_acc_idx]}\n")
+            f.write(f"Best AUC:      {self.history['val_auc'][best_auc_idx]:.4f} @ Epoch {self.history['epoch'][best_auc_idx]}\n")
+            f.write(f"Best Loss:     {self.history['val_loss'][best_loss_idx]:.4f} @ Epoch {self.history['epoch'][best_loss_idx]}\n")
+        print(f"[*] Convergence summary saved to {summary_path}")
 
 
 def create_optimized_dataloaders(
@@ -627,6 +841,7 @@ def create_optimized_dataloaders(
     batch_size: int = 32,
     device_info: Optional['DeviceInfo'] = None,
     num_workers: Optional[int] = None,
+    max_samples_per_domain: Optional[int] = None,
 ) -> Tuple[DataLoader, DataLoader]:
     """
     Create dataloaders with optimal settings for the detected device.
@@ -636,6 +851,7 @@ def create_optimized_dataloaders(
         batch_size: Batch size per GPU
         device_info: DeviceInfo from get_optimal_device()
         num_workers: Override number of workers
+        max_samples_per_domain: Limit samples per domain for faster training
     
     Returns:
         train_loader, val_loader
@@ -663,12 +879,14 @@ def create_optimized_dataloaders(
         domain_paths=domain_paths,
         transform=get_train_transforms(),
         split="train",
+        max_samples_per_domain=max_samples_per_domain,
     )
     
     val_dataset = MultiDomainDataset(
         domain_paths=domain_paths,
         transform=get_val_transforms(),
         split="val",
+        max_samples_per_domain=max_samples_per_domain // 4 if max_samples_per_domain else None,
     )
     
     train_loader = DataLoader(
@@ -724,8 +942,16 @@ def main():
     parser.add_argument("--log_dir", type=str, default="./logs", help="TensorBoard log directory")
     parser.add_argument("--save_dir", type=str, default="./checkpoints", help="Checkpoint save directory")
     parser.add_argument("--resume", type=str, default=None, help="Resume from checkpoint path")
+    parser.add_argument("--max_samples", type=int, default=None, help="Max samples per domain (for faster training)")
+    parser.add_argument("--fast_mode", action="store_true", help="Fast mode: reduces data to 5000 samples/domain")
     
     args = parser.parse_args()
+    
+    # Apply fast mode defaults
+    if args.fast_mode:
+        if args.max_samples is None:
+            args.max_samples = 5000
+        print("[*] Fast mode enabled: limiting to 5000 samples per domain")
     
     print("\n" + "="*60)
     print("GM-DF: Generalized Multi-Scenario Deepfake Detection")
@@ -766,6 +992,7 @@ def main():
         batch_size=args.batch_size,
         device_info=device_info,
         num_workers=args.num_workers,
+        max_samples_per_domain=args.max_samples,
     )
     
     # === Build Model ===

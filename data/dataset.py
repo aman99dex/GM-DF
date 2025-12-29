@@ -50,6 +50,7 @@ class MultiDomainDataset(Dataset):
         split_ratio: float = 0.8,
         seed: int = 42,
         balance_domains: bool = True,
+        max_samples_per_domain: Optional[int] = None,
     ):
         """
         Args:
@@ -59,6 +60,7 @@ class MultiDomainDataset(Dataset):
             split_ratio: Fraction of data for training
             seed: Random seed for reproducible splits
             balance_domains: Whether to balance sampling across domains
+            max_samples_per_domain: Maximum samples per domain (for faster training)
         """
         super().__init__()
         self.domain_paths = domain_paths
@@ -66,6 +68,7 @@ class MultiDomainDataset(Dataset):
         self.split = split
         self.split_ratio = split_ratio
         self.balance_domains = balance_domains
+        self.max_samples_per_domain = max_samples_per_domain
         
         # Map domain names to indices
         self.domain_to_idx = {
@@ -94,6 +97,11 @@ class MultiDomainDataset(Dataset):
                 domain_samples = domain_samples[:split_idx]
             else:
                 domain_samples = domain_samples[split_idx:]
+            
+            # Apply max_samples limit for faster training
+            if self.max_samples_per_domain is not None and len(domain_samples) > self.max_samples_per_domain:
+                domain_samples = domain_samples[:self.max_samples_per_domain]
+                print(f"  [*] Limited {domain_name} to {self.max_samples_per_domain} samples")
             
             self.samples.extend(domain_samples)
             self.domain_counts[domain_name] = len(domain_samples)
