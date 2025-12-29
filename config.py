@@ -1,6 +1,7 @@
 """
 GM-DF Configuration
 Hyperparameters from Section 4.1 of the paper
+With stability fixes for training
 """
 
 from dataclasses import dataclass
@@ -20,32 +21,29 @@ class GMDFConfig:
     num_heads: int = 12  # ViT-B/16 attention heads
     num_layers: int = 12  # ViT-B/16 transformer layers
     
-    # === Dataset-Embedding Generator (DEG) ===
+    # === Dataset-Embedding Generator (DEG) - Eq.2 ===
     num_experts: int = 3  # N independent experts (Section 3.1)
     domain_embed_dim: int = 64  # k dimension for c_d in Eq.2
     num_domains: int = 5  # FF++, WDF, Celeb-DF, DFDC, DFF
     
-    # === Multi-Dataset Representation (MDP) ===
+    # === Multi-Dataset Representation (MDP) - Eq.7-8 ===
     second_order_layers: Tuple[int, ...] = (8, 9, 10)  # Layers for Eq.7-8
     alpha_init: float = 0.1  # Initial α_l for second-order fusion
     
-    # === Masked Image Modeling (MIM) ===
-    # === Masked Image Modeling (MIM) ===
-    # Using Pixel Regression (MAE style) - no vocab needed
-    mask_ratio: float = 0.50  # Increased for MAE (usually 50-75%)
-    mim_decoder_layers: int = 4  # Slightly deeper for reconstruction
+    # === Masked Image Modeling (MIM) - Eq.6 ===
+    mask_ratio: float = 0.50  # MAE-style masking (50%)
+    mim_decoder_layers: int = 4  # Decoder depth
     mim_decoder_dim: int = 384  # Decoder hidden dimension
     
-    # === Prompt Learning ===
+    # === Prompt Learning - Eq.9-11 ===
     prompt_length: int = 4  # Learnable context tokens
     tau_base: float = 0.07  # Base temperature (CLIP default)
     tau_phi: float = 0.01  # Temperature scaling factor φ in Eq.10
     
-    # === MAML Training (MDEO) ===
-    # Inner: High LR (fast adaptation)
-    # Outer: Low LR (stable meta-learning)
-    inner_lr: float = 1e-3  # β (Inner loop needs to affect weights significantly)
-    outer_lr: float = 1e-4  # δ (Outer loop updates initialization slowly)
+    # === MAML Training (MDEO) - Eq.13-15 ===
+    # Conservative learning rates for stability
+    inner_lr: float = 5e-5  # β - inner loop (adaptation)
+    outer_lr: float = 1e-5  # δ - outer loop (meta-update)
     inner_steps: int = 1  # Inner loop gradient steps
     
     # === General Training ===
@@ -53,18 +51,22 @@ class GMDFConfig:
     epochs: int = 40  # Section 4.1
     weight_decay: float = 1e-4
     
-    # === Loss Weights ===
-    lambda_mim: float = 0.5  # Weight for L_mim (reconstruction)
-    lambda_sis: float = 0.5  # Weight for L_sis (contrastive)
-    lambda_dal: float = 0.1  # Weight for L_dal (domain alignment) - NEW
+    # === Loss Weights (Eq.14) ===
+    # Paper uses equal weighting, we add stability
+    lambda_cls: float = 1.0   # L_cls (classification)
+    lambda_mim: float = 0.5   # L_mim (masked image modeling) 
+    lambda_sis: float = 0.5   # L_sis (contrastive/SIS)
+    lambda_dal: float = 0.1   # L_dal (domain alignment - MMD)
     
     # === Training Strategy ===
-    freeze_backbone: bool = True  # Freeze CLIP backbone (standard practice)
+    freeze_backbone: bool = True  # Freeze CLIP backbone (standard)
+    grad_clip: float = 1.0  # Gradient clipping norm
+    nan_skip_threshold: int = 10  # Stop if too many NaN batches
     
     # === Domain Names (for prompts) ===
     domain_names: Tuple[str, ...] = (
         "FaceForensics",
-        "WildDeepfake",
+        "WildDeepfake", 
         "CelebDF",
         "DFDC",
         "DeepFakeFace",

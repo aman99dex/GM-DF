@@ -37,6 +37,7 @@ class MultiDomainDataset(Dataset):
         "FaceForensics",
         "WildDeepfake",
         "CelebDF",
+        "Celeb-DF-v2",  # CelebDF alternate naming
         "DFDC",
         "DeepFakeFace",
     ]
@@ -110,17 +111,40 @@ class MultiDomainDataset(Dataset):
         samples = []
         domain_path = Path(domain_path)
         
-        # Load real images (recursively to support nested structures like c23/videos/xxx/)
+        # Standard structure: real/ and fake/
         real_path = domain_path / "real"
+        fake_path = domain_path / "fake"
+        
+        # CelebDF structure: Celeb-real, YouTube-real, Celeb-synthesis
+        celeb_real_path = domain_path / "Celeb-real"
+        youtube_real_path = domain_path / "YouTube-real"
+        celeb_fake_path = domain_path / "Celeb-synthesis"
+        
+        # Collect all real image paths
+        real_paths = []
         if real_path.exists():
-            for img_path in real_path.rglob("*"):
+            real_paths.append(real_path)
+        if celeb_real_path.exists():
+            real_paths.append(celeb_real_path)
+        if youtube_real_path.exists():
+            real_paths.append(youtube_real_path)
+        
+        # Collect all fake image paths
+        fake_paths = []
+        if fake_path.exists():
+            fake_paths.append(fake_path)
+        if celeb_fake_path.exists():
+            fake_paths.append(celeb_fake_path)
+        
+        # Load real images
+        for rpath in real_paths:
+            for img_path in rpath.rglob("*"):
                 if img_path.is_file() and img_path.suffix.lower() in [".jpg", ".jpeg", ".png", ".bmp"]:
                     samples.append((str(img_path), 0, domain_id))
         
-        # Load fake images (recursively to support nested structures)
-        fake_path = domain_path / "fake"
-        if fake_path.exists():
-            for img_path in fake_path.rglob("*"):
+        # Load fake images
+        for fpath in fake_paths:
+            for img_path in fpath.rglob("*"):
                 if img_path.is_file() and img_path.suffix.lower() in [".jpg", ".jpeg", ".png", ".bmp"]:
                     samples.append((str(img_path), 1, domain_id))
         

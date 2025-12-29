@@ -276,35 +276,66 @@ class MAMLTrainer:
                 if n in theta_E_state:
                     p.data.copy_(theta_E_state[n])
         
+        # --- NaN Detection: Skip update if loss is NaN ---
+        if torch.isnan(loss_total_B) or torch.isinf(loss_total_B):
+            print(f"[!] NaN/Inf detected in loss, skipping batch")
+            # Return zeros for this batch
+            return {
+                "loss_cls_A": 0.0,
+                "loss_cls_B": 0.0,
+                "loss_mim_B": 0.0,
+                "loss_sis_B": 0.0,
+                "loss_dal_B": 0.0,
+                "loss_total_B": 0.0,
+            }
+        
         # --- 6. Meta-Update (Outer Loop) ---
         # Update both θ_E (initialization) and θ_O (shared)
         # using the gradients computed at θ'_E (FOMAML)
         
         if self.use_amp and self.scaler:
             self.scaler.unscale_(self.outer_optimizer)
-            torch.nn.utils.clip_grad_norm_(self.theta_O + self.theta_E, max_norm=1.0)
+            # Gradient clipping from config
+            grad_clip = getattr(self.config, 'grad_clip', 1.0)
+            torch.nn.utils.clip_grad_norm_(self.theta_O + self.theta_E, max_norm=grad_clip)
+            
+            # Check for NaN in gradients
+            has_nan_grad = False
+            for p in self.theta_O + self.theta_E:
+                if p.grad is not None and (torch.isnan(p.grad).any() or torch.isinf(p.grad).any()):
+                    has_nan_grad = True
+                    break
+            
+            if has_nan_grad:
+                print(f"[!] NaN/Inf in gradients, skipping update")
+                self.scaler.update()
+                return {
+                    "loss_cls_A": loss_cls_A,
+                    "loss_cls_B": 0.0,
+                    "loss_mim_B": 0.0,
+                    "loss_sis_B": 0.0,
+                    "loss_dal_B": 0.0,
+                    "loss_total_B": 0.0,
+                }
+            
             self.scaler.step(self.outer_optimizer)
-            # We also need to update theta_E initialization. 
-            # In original code, theta_E wasn't in outer_optimizer.
-            # We should probably add theta_E to outer_optimizer with low LR 
-            # OR manually update it.
-            # Let's assume for this implementation we want to learn the initialization.
-            # So we should perform a step on theta_E using outer_lr.
             
             # Manual SGD step for theta_E using its current gradients
             with torch.no_grad():
                 for p in self.theta_E:
-                    if p.grad is not None:
+                    if p.grad is not None and not torch.isnan(p.grad).any():
                         p.data -= self.config.outer_lr * p.grad
             
             self.scaler.update()
         else:
-            torch.nn.utils.clip_grad_norm_(self.theta_O + self.theta_E, max_norm=1.0)
+            # Gradient clipping from config (non-AMP path)
+            grad_clip = getattr(self.config, 'grad_clip', 1.0)
+            torch.nn.utils.clip_grad_norm_(self.theta_O + self.theta_E, max_norm=grad_clip)
             self.outer_optimizer.step()
             # Manual step for theta_E
             with torch.no_grad():
                 for p in self.theta_E:
-                    if p.grad is not None:
+                    if p.grad is not None and not torch.isnan(p.grad).any():
                         p.data -= self.config.outer_lr * p.grad
         
         losses = {
@@ -354,25 +385,64 @@ class MAMLTrainer:
         train_loader: DataLoader,
         epoch: int,
     ) -> Dict[str, float]:
-        """Train for one epoch."""
+        """Train for one epoch with proper cross-domain batch pairing."""
         self.model.train()
         
         epoch_losses = defaultdict(list)
         
-        # Get all batches grouped by domain
-        all_batches = list(train_loader)
-        random.shuffle(all_batches)
+        # Group batches by domain
+        domain_batches = defaultdict(list)
+        for batch in train_loader:
+            images, labels, domain_ids = batch
+            # Use the majority domain in this batch
+            dominant_domain = domain_ids.mode().values.item()
+            domain_batches[dominant_domain].append(batch)
         
-        # Pair up consecutive batches as A and B domains
-        pbar = tqdm(
-            range(0, len(all_batches) - 1, 2),
-            desc=f"Epoch {epoch}",
-        )
+        # Get list of domains that have batches
+        available_domains = list(domain_batches.keys())
         
-        for i in pbar:
-            batch_A = all_batches[i]
-            batch_B = all_batches[i + 1]
+        if len(available_domains) < 2:
+            print(f"[!] Warning: Only {len(available_domains)} domain(s) available. MAML needs 2+.")
+            # Fallback: just pair consecutive batches
+            all_batches = list(train_loader)
+            random.shuffle(all_batches)
+            pairs = [(all_batches[i], all_batches[i+1]) for i in range(0, len(all_batches)-1, 2)]
+        else:
+            # Create cross-domain pairs: (batch from domain A, batch from domain B)
+            pairs = []
             
+            # Shuffle within each domain
+            for d in available_domains:
+                random.shuffle(domain_batches[d])
+            
+            # Create pairs by cycling through domains
+            domain_indices = {d: 0 for d in available_domains}
+            domain_list = list(available_domains)
+            
+            while True:
+                # Pick two different domains
+                random.shuffle(domain_list)
+                domain_A, domain_B = domain_list[0], domain_list[1 % len(domain_list)]
+                
+                # Get next batch from each domain
+                idx_A = domain_indices[domain_A]
+                idx_B = domain_indices[domain_B]
+                
+                if idx_A >= len(domain_batches[domain_A]) or idx_B >= len(domain_batches[domain_B]):
+                    break
+                
+                pairs.append((
+                    domain_batches[domain_A][idx_A],
+                    domain_batches[domain_B][idx_B]
+                ))
+                
+                domain_indices[domain_A] += 1
+                domain_indices[domain_B] += 1
+        
+        # Training loop
+        pbar = tqdm(pairs, desc=f"Epoch {epoch}")
+        
+        for batch_A, batch_B in pbar:
             losses = self.train_step(batch_A, batch_B)
             
             for k, v in losses.items():
@@ -382,6 +452,7 @@ class MAMLTrainer:
             pbar.set_postfix({
                 "loss": f"{losses['loss_total_B']:.4f}",
                 "cls": f"{losses['loss_cls_B']:.4f}",
+                "dal": f"{losses['loss_dal_B']:.4f}",
             })
         
         # Average losses
@@ -574,12 +645,14 @@ def create_optimized_dataloaders(
     # Get optimal DataLoader kwargs
     if UTILS_AVAILABLE and device_info is not None:
         loader_kwargs = get_dataloader_kwargs(device_info, num_workers)
+        # Disable pin_memory to avoid OOM in pin_memory thread
+        loader_kwargs["pin_memory"] = False
     else:
         # Fallback defaults
         num_cpus = os.cpu_count() or 4
         loader_kwargs = {
             "num_workers": min(num_cpus, 4),
-            "pin_memory": torch.cuda.is_available(),
+            "pin_memory": False,  # Disabled to prevent OOM
             "persistent_workers": True,
             "prefetch_factor": 2,
         }

@@ -743,10 +743,12 @@ class GMDF_Detector(nn.Module):
         outputs["logits"] = logits
         
         if labels is not None:
-            # Classification loss (Eq.12)
+            # Simple BCE loss with mild class weighting (stable)
+            pos_weight = torch.tensor([1.5], device=logits.device)  # Mild weight for fake class
             loss_cls = F.binary_cross_entropy_with_logits(
                 logits.squeeze(-1), 
-                labels.float()
+                labels.float(),
+                pos_weight=pos_weight.expand_as(logits.squeeze(-1))
             )
             outputs["loss_cls"] = loss_cls
             
@@ -787,9 +789,10 @@ class GMDF_Detector(nn.Module):
             loss_sis = torch.clamp(loss_sis, min=0.0, max=100.0)
             loss_dal = torch.clamp(loss_dal, min=0.0, max=100.0)
             
-            # Total loss (Eq.14 + L_dal)
+            # Total loss (Eq.14 + L_dal) - Classification boosted
+            lambda_cls = getattr(self.config, 'lambda_cls', 1.0)
             loss_total = (
-                loss_cls + 
+                lambda_cls * loss_cls + 
                 self.config.lambda_mim * loss_mim + 
                 self.config.lambda_sis * loss_sis +
                 self.config.lambda_dal * loss_dal
