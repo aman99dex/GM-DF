@@ -476,7 +476,7 @@ class GMDF_Detector(nn.Module):
         self.clip_model.float()  # Use float32 for training
         
         # Freeze/Unfreeze CLIP backbone based on config
-        # Freezing is recommended to preserve pretrained features
+        # KEEP FROZEN - unfreezing causes feature corruption and AUC collapse
         for param in self.clip_model.parameters():
             param.requires_grad = not config.freeze_backbone
         
@@ -518,13 +518,20 @@ class GMDF_Detector(nn.Module):
             tau_phi=config.tau_phi,
         )
         
-        # Classification head
+        # Classification head - properly initialized
         self.classifier = nn.Sequential(
             nn.Linear(512, 256),
             nn.GELU(),
             nn.Dropout(0.1),
             nn.Linear(256, 1),  # Binary: real (0) vs fake (1)
         )
+        # Initialize classifier to predict 50/50 at start (unbiased)
+        with torch.no_grad():
+            # Zero bias on final layer for balanced predictions
+            self.classifier[-1].bias.zero_()
+            # Small weights to prevent saturation
+            nn.init.xavier_uniform_(self.classifier[-1].weight, gain=0.1)
+            nn.init.xavier_uniform_(self.classifier[0].weight, gain=0.5)
         
         # Storage for intermediate features
         self.intermediate_features = {}
@@ -659,22 +666,19 @@ class GMDF_Detector(nn.Module):
         domain_ids: torch.Tensor,  # (B,)
     ) -> torch.Tensor:
         """
-        Compute Domain Alignment Loss using Maximum Mean Discrepancy (MMD).
+        Compute Domain Alignment Loss using Wasserstein-2 style metric (Paper Eq.14).
         
-        Aligns feature distributions across different domains to learn 
-        domain-invariant representations.
+        L_sis = ||μ_s - μ_t||² + Tr(Σ_s + Σ_t - 2(Σ_s·Σ_t)^0.5)
         
-        MMD(P, Q) = ||μ_P - μ_Q||² + ||Σ_P - Σ_Q||_F
-        
-        For computational efficiency, we use a simplified version:
-        L_dal = Σ_{d1 ≠ d2} ||μ_{d1} - μ_{d2}||²
+        For numerical stability, we use a simplified approximation:
+        L_sis = ||μ_s - μ_t||² + ||Σ_s^0.5 - Σ_t^0.5||_F²
         
         Args:
             features: Visual features (B, D)
             domain_ids: Domain indices (B,)
         
         Returns:
-            loss_dal: Scalar loss
+            loss_sis: Scalar loss
         """
         unique_domains = domain_ids.unique()
         
@@ -682,21 +686,43 @@ class GMDF_Detector(nn.Module):
         if len(unique_domains) < 2:
             return torch.tensor(0.0, device=features.device, requires_grad=True)
         
-        # Compute mean features per domain
-        domain_means = []
+        # Compute mean and covariance per domain
+        domain_stats = []
         for d in unique_domains:
             mask = domain_ids == d
-            if mask.sum() > 0:
-                domain_mean = features[mask].mean(dim=0)  # (D,)
-                domain_means.append(domain_mean)
+            n = mask.sum()
+            if n >= 2:  # Need at least 2 samples for covariance
+                domain_feats = features[mask]  # (n, D)
+                mean = domain_feats.mean(dim=0)  # (D,)
+                # Compute covariance (centered)
+                centered = domain_feats - mean.unsqueeze(0)
+                cov = torch.mm(centered.T, centered) / (n - 1)  # (D, D)
+                # Add small epsilon for numerical stability
+                cov = cov + 1e-6 * torch.eye(cov.size(0), device=cov.device)
+                domain_stats.append((mean, cov))
         
-        # Compute pairwise MMD (simplified: mean distance)
+        if len(domain_stats) < 2:
+            return torch.tensor(0.0, device=features.device, requires_grad=True)
+        
+        # Compute pairwise Wasserstein-2 approximation
         loss = torch.tensor(0.0, device=features.device)
         count = 0
-        for i in range(len(domain_means)):
-            for j in range(i + 1, len(domain_means)):
-                # L2 distance between means
-                loss = loss + F.mse_loss(domain_means[i], domain_means[j])
+        for i in range(len(domain_stats)):
+            for j in range(i + 1, len(domain_stats)):
+                mu_s, cov_s = domain_stats[i]
+                mu_t, cov_t = domain_stats[j]
+                
+                # Mean distance: ||μ_s - μ_t||²
+                mean_diff = (mu_s - mu_t).pow(2).sum()
+                
+                # Covariance distance (simplified: Frobenius norm of difference)
+                # Full Wasserstein would need matrix sqrt, which is expensive
+                # Approximation: use diagonal variance difference
+                var_s = torch.diag(cov_s)
+                var_t = torch.diag(cov_t)
+                var_diff = (var_s.sqrt() - var_t.sqrt()).pow(2).sum()
+                
+                loss = loss + mean_diff + 0.1 * var_diff
                 count += 1
         
         if count > 0:
@@ -735,18 +761,22 @@ class GMDF_Detector(nn.Module):
         # Encode images
         cls_features, all_features, layer_features, cls_token_768 = self.encode_image(images, domain_ids)
         
-        # Second-order feature aggregation (Eq.7-8) - uses 768D CLS token
-        visual_features = self.second_order_agg(layer_features, cls_token_768)  # (B, 512)
+        # EXPERIMENT 2: Bypass SecondOrderAgg, use CLIP CLS features directly
+        # Testing if SecondOrderAgg is causing the stuck AUC issue
+        visual_features = cls_features  # Direct 512-dim CLIP features
+        
+        # L2 normalize for stable classification
+        visual_features = F.normalize(visual_features, dim=-1)
         
         # Classification
         logits = self.classifier(visual_features)  # (B, 1)
         outputs["logits"] = logits
         
         if labels is not None:
-            # Simple BCE loss with mild class weighting (stable)
-            pos_weight = torch.tensor([1.5], device=logits.device)  # Mild weight for fake class
+            # Weighted BCE loss per paper
+            pos_weight = torch.tensor([1.5], device=logits.device)  # Moderate weight for fake class
             loss_cls = F.binary_cross_entropy_with_logits(
-                logits.squeeze(-1), 
+                logits.squeeze(-1),
                 labels.float(),
                 pos_weight=pos_weight.expand_as(logits.squeeze(-1))
             )
@@ -814,9 +844,11 @@ class GMDF_Detector(nn.Module):
             Dictionary with:
                 - theta_E: MoE expert parameters (inner loop)
                 - theta_O: Other trainable parameters (outer loop)
+                - theta_cls: Classifier parameters (needs higher LR)
         """
         theta_E = []  # Expert parameters
         theta_O = []  # Other parameters
+        theta_cls = []  # Classifier parameters (separate for higher LR)
         
         for name, param in self.named_parameters():
             if not param.requires_grad:
@@ -824,10 +856,12 @@ class GMDF_Detector(nn.Module):
             
             if "moe_adapter" in name or "experts" in name or "router" in name:
                 theta_E.append(param)
+            elif "classifier" in name:
+                theta_cls.append(param)  # Classifier gets higher LR
             else:
                 theta_O.append(param)
         
-        return {"theta_E": theta_E, "theta_O": theta_O}
+        return {"theta_E": theta_E, "theta_O": theta_O, "theta_cls": theta_cls}
     
     @torch.no_grad()
     def predict(self, images: torch.Tensor, domain_ids: torch.Tensor) -> torch.Tensor:

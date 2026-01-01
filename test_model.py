@@ -31,7 +31,7 @@ def test_model(args):
         return
 
     print(f"[*] Loading checkpoint from {args.model_path}")
-    checkpoint = torch.load(args.model_path, map_location=device)
+    checkpoint = torch.load(args.model_path, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.to(device)
     model.eval()

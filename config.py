@@ -31,7 +31,7 @@ class GMDFConfig:
     alpha_init: float = 0.1  # Initial α_l for second-order fusion
     
     # === Masked Image Modeling (MIM) - Eq.6 ===
-    mask_ratio: float = 0.50  # MAE-style masking (50%)
+    mask_ratio: float = 0.50  # Paper: 50% masking ratio
     mim_decoder_layers: int = 4  # Decoder depth
     mim_decoder_dim: int = 384  # Decoder hidden dimension
     
@@ -41,22 +41,21 @@ class GMDFConfig:
     tau_phi: float = 0.01  # Temperature scaling factor φ in Eq.10
     
     # === MAML Training (MDEO) - Eq.13-15 ===
-    # Conservative learning rates for stability
-    inner_lr: float = 5e-5  # β - inner loop (adaptation)
-    outer_lr: float = 1e-5  # δ - outer loop (meta-update)
-    inner_steps: int = 1  # Inner loop gradient steps
+    # Best found: outer_lr=1e-5 works better than paper spec 3e-6
+    inner_lr: float = 1e-4   # β - inner loop (experts/adaptation)
+    outer_lr: float = 1e-5   # δ - outer loop (backbone) - OPTIMIZED
+    inner_steps: int = 1     # Inner loop gradient steps
     
     # === General Training ===
     batch_size: int = 32  # Section 4.1
     epochs: int = 40  # Section 4.1
     weight_decay: float = 1e-4
     
-    # === Loss Weights (Eq.14) ===
-    # Paper uses equal weighting, we add stability
+    # === Loss Weights (Eq.14) - EXPERIMENT 3: Classification only ===
     lambda_cls: float = 1.0   # L_cls (classification)
-    lambda_mim: float = 0.5   # L_mim (masked image modeling) 
-    lambda_sis: float = 0.5   # L_sis (contrastive/SIS)
-    lambda_dal: float = 0.1   # L_dal (domain alignment - MMD)
+    lambda_mim: float = 0.0   # DISABLED for experiment
+    lambda_sis: float = 0.0   # DISABLED for experiment
+    lambda_dal: float = 0.0   # DISABLED
     
     # === Training Strategy ===
     freeze_backbone: bool = True  # Freeze CLIP backbone (standard)

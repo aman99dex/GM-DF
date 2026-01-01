@@ -171,17 +171,31 @@ class MAMLTrainer:
         param_groups = model.get_trainable_params()
         self.theta_E = param_groups["theta_E"]  # Expert params (inner loop)
         self.theta_O = param_groups["theta_O"]  # Other params (outer loop)
+        self.theta_cls = param_groups.get("theta_cls", [])  # Classifier params (higher LR)
         
         # Optimizers
         self.inner_optimizer = torch.optim.SGD(
             self.theta_E, 
             lr=config.inner_lr,
         )
+        
+        # Outer optimizer for general params
         self.outer_optimizer = torch.optim.Adam(
             self.theta_O,
             lr=config.outer_lr,
             weight_decay=config.weight_decay,
         )
+        
+        # Classifier optimizer with 10x higher LR to prevent stuck predictions
+        if self.theta_cls:
+            self.cls_optimizer = torch.optim.Adam(
+                self.theta_cls,
+                lr=config.outer_lr * 10,  # 10x higher LR for classifier
+                weight_decay=config.weight_decay,
+            )
+            print(f"[*] Classifier LR: {config.outer_lr * 10:.2e} (10x outer_lr)")
+        else:
+            self.cls_optimizer = None
         
         # Learning rate scheduler with warmup (5 epochs warmup)
         warmup_epochs = 5
@@ -318,11 +332,10 @@ class MAMLTrainer:
         
         # --- 4. Compute Gradients for Outer Update ---
         self.outer_optimizer.zero_grad() # Clears θ_O grads
+        if self.cls_optimizer is not None:
+            self.cls_optimizer.zero_grad()  # Clears classifier grads
         
-        # We also need to clear θ_E grads from the inner loop update
-        # (Though zero_grad above might have done it if they are in same optimizer, 
-        # checking manually or just relying on zero_grad for all params is safer).
-        # Actually standard practice:
+        # Clear all model grads for clean backward pass
         self.model.zero_grad()
         
         if self.use_amp and self.scaler:
@@ -362,13 +375,17 @@ class MAMLTrainer:
         
         if self.use_amp and self.scaler:
             self.scaler.unscale_(self.outer_optimizer)
+            if self.cls_optimizer is not None:
+                self.scaler.unscale_(self.cls_optimizer)
+            
             # Gradient clipping from config
             grad_clip = getattr(self.config, 'grad_clip', 1.0)
-            torch.nn.utils.clip_grad_norm_(self.theta_O + self.theta_E, max_norm=grad_clip)
+            all_params = self.theta_O + self.theta_E + self.theta_cls
+            torch.nn.utils.clip_grad_norm_(all_params, max_norm=grad_clip)
             
             # Check for NaN in gradients
             has_nan_grad = False
-            for p in self.theta_O + self.theta_E:
+            for p in all_params:
                 if p.grad is not None and (torch.isnan(p.grad).any() or torch.isinf(p.grad).any()):
                     has_nan_grad = True
                     break
@@ -387,6 +404,10 @@ class MAMLTrainer:
             
             self.scaler.step(self.outer_optimizer)
             
+            # Step classifier optimizer (higher LR)
+            if self.cls_optimizer is not None:
+                self.scaler.step(self.cls_optimizer)
+            
             # Manual SGD step for theta_E using its current gradients
             with torch.no_grad():
                 for p in self.theta_E:
@@ -397,8 +418,13 @@ class MAMLTrainer:
         else:
             # Gradient clipping from config (non-AMP path)
             grad_clip = getattr(self.config, 'grad_clip', 1.0)
-            torch.nn.utils.clip_grad_norm_(self.theta_O + self.theta_E, max_norm=grad_clip)
+            torch.nn.utils.clip_grad_norm_(self.theta_O + self.theta_E + self.theta_cls, max_norm=grad_clip)
             self.outer_optimizer.step()
+            
+            # Step classifier optimizer (higher LR)
+            if self.cls_optimizer is not None:
+                self.cls_optimizer.step()
+            
             # Manual step for theta_E
             with torch.no_grad():
                 for p in self.theta_E:
@@ -575,8 +601,9 @@ class MAMLTrainer:
             fpr, tpr, thresholds = roc_curve(all_labels, all_preds, pos_label=1)
             fnr = 1 - tpr
             # Find point where fpr and fnr are closest
-            eer_threshold = thresholds[np.nanargmin(np.absolute((fnr - fpr)))]
-            eer = fpr[np.nanargmin(np.absolute((fnr - fpr)))]
+            eer_idx = np.nanargmin(np.absolute(fnr - fpr))
+            # EER is the average of FPR and FNR at the intersection point
+            eer = (fpr[eer_idx] + fnr[eer_idx]) / 2
         except ValueError:
             auc = 0.5  # Handle case with single class
             eer = 0.5
