@@ -94,6 +94,8 @@ def test_model(args):
             images = images.to(device)
             labels = labels.to(device)
             domain_ids = domain_ids.to(device)
+            # Clamp domain_ids to valid range for model (max 5 for trained model)
+            domain_ids = torch.clamp(domain_ids, 0, 5)
             
             # Forward pass
             outputs = model(images, domain_ids, labels) # labels needed for some internal logic? 

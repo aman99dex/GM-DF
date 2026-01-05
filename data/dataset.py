@@ -37,9 +37,11 @@ class MultiDomainDataset(Dataset):
         "FaceForensics",
         "WildDeepfake",
         "CelebDF",
-        "Celeb-DF-v2",  # CelebDF alternate naming
+        "Celeb-DF-v1",  # CelebDF v1
+        "Celeb-DF-v2",  # CelebDF v2
         "DFDC",
         "DeepFakeFace",
+        "test",  # Generic test domain
     ]
     
     def __init__(
