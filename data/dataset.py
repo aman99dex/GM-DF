@@ -32,16 +32,18 @@ class MultiDomainDataset(Dataset):
             └── ...
     """
     
-    # Default domain names matching config
+    # Default domain names - first 5 are primary training domains (must match config.num_domains)
     DOMAIN_NAMES = [
-        "FaceForensics",
-        "WildDeepfake",
+        "FaceForensics",       # 0
+        "Celeb-DF-v1",         # 1
+        "Celeb-DF-v2",         # 2
+        "WildDeepfake",        # 3
+        "StableDiffusion",     # 4
+        # Additional domains (index >= 5, need to update config.num_domains if used)
         "CelebDF",
-        "Celeb-DF-v1",  # CelebDF v1
-        "Celeb-DF-v2",  # CelebDF v2
         "DFDC",
         "DeepFakeFace",
-        "test",  # Generic test domain
+        "test",
     ]
     
     def __init__(
