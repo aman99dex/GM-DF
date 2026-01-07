@@ -51,11 +51,11 @@ class GMDFConfig:
     epochs: int = 40  # Section 4.1
     weight_decay: float = 1e-4
     
-    # === Loss Weights (Eq.14) - EXPERIMENT 3: Classification only ===
+    # === Loss Weights (Eq.14) - Paper aligned with stability tuning ===
     lambda_cls: float = 1.0   # L_cls (classification)
-    lambda_mim: float = 0.0   # DISABLED for experiment
-    lambda_sis: float = 0.0   # DISABLED for experiment
-    lambda_dal: float = 0.0   # DISABLED
+    lambda_mim: float = 0.1   # L_mim (masked image modeling) - reduced for stability
+    lambda_sis: float = 0.1   # L_sis (similarity contrastive) - reduced for stability
+    lambda_dal: float = 0.05  # L_dal (domain alignment)
     
     # === Training Strategy ===
     freeze_backbone: bool = True  # Freeze CLIP backbone (standard)
@@ -68,7 +68,7 @@ class GMDFConfig:
         "WildDeepfake", 
         "CelebDF",
         "DFDC",
-        "DeepFakeFace",
+        "StableDiffusion",  # SD-generated fake faces
     )
 
 
