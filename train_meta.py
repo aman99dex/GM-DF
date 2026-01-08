@@ -186,14 +186,14 @@ class MAMLTrainer:
             weight_decay=config.weight_decay,
         )
         
-        # Classifier optimizer with 10x higher LR to prevent stuck predictions
+        # Classifier optimizer with 100x higher LR to prevent stuck predictions
         if self.theta_cls:
             self.cls_optimizer = torch.optim.Adam(
                 self.theta_cls,
-                lr=config.outer_lr * 10,  # 10x higher LR for classifier
+                lr=config.outer_lr * 100,  # 100x higher LR for classifier
                 weight_decay=config.weight_decay,
             )
-            print(f"[*] Classifier LR: {config.outer_lr * 10:.2e} (10x outer_lr)")
+            print(f"[*] Classifier LR: {config.outer_lr * 100:.2e} (100x outer_lr)")
         else:
             self.cls_optimizer = None
         

@@ -41,9 +41,9 @@ class GMDFConfig:
     tau_phi: float = 0.01  # Temperature scaling factor φ in Eq.10
     
     # === MAML Training (MDEO) - Eq.13-15 ===
-    # Optimized: outer_lr=1e-5 works better than paper spec 3e-6
+    # Optimized for AUC: higher LR with unfrozen backbone
     inner_lr: float = 1e-4   # β - inner loop (experts/adaptation)
-    outer_lr: float = 1e-5   # δ - outer loop - OPTIMIZED for AUC
+    outer_lr: float = 5e-5   # δ - higher for unfrozen backbone
     inner_steps: int = 1     # Inner loop gradient steps
     
     # === General Training ===
@@ -58,7 +58,7 @@ class GMDFConfig:
     lambda_dal: float = 0.05  # L_dal - light regularization
     
     # === Training Strategy ===
-    freeze_backbone: bool = True  # Freeze CLIP backbone (standard)
+    freeze_backbone: bool = False  # UNFROZEN for better AUC
     grad_clip: float = 1.0  # Gradient clipping norm
     nan_skip_threshold: int = 10  # Stop if too many NaN batches
     
