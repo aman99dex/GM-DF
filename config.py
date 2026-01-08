@@ -58,7 +58,7 @@ class GMDFConfig:
     lambda_dal: float = 0.05  # L_dal - light regularization
     
     # === Training Strategy ===
-    freeze_backbone: bool = False  # UNFROZEN for better AUC
+    freeze_backbone: bool = True  # FROZEN - unfreezing corrupts CLIP features
     grad_clip: float = 1.0  # Gradient clipping norm
     nan_skip_threshold: int = 10  # Stop if too many NaN batches
     

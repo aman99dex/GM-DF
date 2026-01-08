@@ -518,20 +518,20 @@ class GMDF_Detector(nn.Module):
             tau_phi=config.tau_phi,
         )
         
-        # Classification head - properly initialized
+        # Classification head - properly initialized for gradient flow
         self.classifier = nn.Sequential(
             nn.Linear(512, 256),
             nn.GELU(),
             nn.Dropout(0.1),
             nn.Linear(256, 1),  # Binary: real (0) vs fake (1)
         )
-        # Initialize classifier to predict 50/50 at start (unbiased)
+        # Initialize classifier with standard Xavier (not overly conservative)
         with torch.no_grad():
             # Zero bias on final layer for balanced predictions
             self.classifier[-1].bias.zero_()
-            # Small weights to prevent saturation
-            nn.init.xavier_uniform_(self.classifier[-1].weight, gain=0.1)
-            nn.init.xavier_uniform_(self.classifier[0].weight, gain=0.5)
+            # Standard initialization for proper gradient flow
+            nn.init.xavier_uniform_(self.classifier[-1].weight, gain=1.0)
+            nn.init.xavier_uniform_(self.classifier[0].weight, gain=1.0)
         
         # Storage for intermediate features
         self.intermediate_features = {}
@@ -765,8 +765,8 @@ class GMDF_Detector(nn.Module):
         # Testing if SecondOrderAgg is causing the stuck AUC issue
         visual_features = cls_features  # Direct 512-dim CLIP features
         
-        # L2 normalize for stable classification
-        visual_features = F.normalize(visual_features, dim=-1)
+        # NOTE: Removed L2 normalization - it was compressing feature space
+        # and causing classifier to output nearly constant values
         
         # Classification
         logits = self.classifier(visual_features)  # (B, 1)
