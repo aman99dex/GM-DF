@@ -41,9 +41,9 @@ class GMDFConfig:
     tau_phi: float = 0.01  # Temperature scaling factor φ in Eq.10
     
     # === MAML Training (MDEO) - Eq.13-15 ===
-    # Paper Section 4.1: inner_lr=1e-4, outer_lr=3e-6
+    # Optimized: outer_lr=1e-5 works better than paper spec 3e-6
     inner_lr: float = 1e-4   # β - inner loop (experts/adaptation)
-    outer_lr: float = 3e-6   # δ - outer loop (backbone) - PAPER SPEC
+    outer_lr: float = 1e-5   # δ - outer loop - OPTIMIZED for AUC
     inner_steps: int = 1     # Inner loop gradient steps
     
     # === General Training ===
@@ -51,11 +51,11 @@ class GMDFConfig:
     epochs: int = 40  # Section 4.1
     weight_decay: float = 1e-4
     
-    # === Loss Weights (Eq.14) - Paper Section 4.1 ===
-    lambda_cls: float = 1.0   # L_cls (classification)
-    lambda_mim: float = 0.5   # L_mim (masked image modeling) - Paper spec
-    lambda_sis: float = 0.3   # L_sis (similarity contrastive) - Paper spec
-    lambda_dal: float = 0.1   # L_dal (domain alignment)
+    # === Loss Weights (Eq.14) - Optimized for AUC ===
+    lambda_cls: float = 1.0   # L_cls (classification) - primary
+    lambda_mim: float = 0.1   # L_mim - reduced to avoid dominating
+    lambda_sis: float = 0.1   # L_sis - reduced for stability
+    lambda_dal: float = 0.05  # L_dal - light regularization
     
     # === Training Strategy ===
     freeze_backbone: bool = True  # Freeze CLIP backbone (standard)
