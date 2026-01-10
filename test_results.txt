@@ -1,0 +1,11 @@
+GM-DF Test Results
+========================================
+
+Overall: AUC=0.9952, EER=0.0366, Acc=0.9711
+
+Per-Domain:
+  FaceForensics: AUC=0.9856, EER=0.0679, Acc=0.9305
+  Celeb-DF-v1: AUC=0.9999, EER=0.0029, Acc=0.9976
+  Celeb-DF-v2: AUC=0.9723, EER=0.0903, Acc=0.9580
+  WildDeepfake: AUC=0.9903, EER=0.0500, Acc=0.9535
+  StableDiffusion: AUC=0.5000, EER=0.5000, Acc=1.0000
