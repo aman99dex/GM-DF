@@ -60,22 +60,19 @@ class SimpleCLIPClassifier(nn.Module):
         return logits.squeeze(-1)
 
 
-def train_simple():
+def train_simple(args):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}")
     
     # Hyperparameters
-    batch_size = 64
-    epochs = 30
-    lr = 1e-3  # Higher LR for classifier-only training
+    batch_size = args.batch_size
+    epochs = args.epochs
+    lr = args.lr
     
     # Load data
     domain_paths = {
-        "FaceForensics": "datasets/FaceForensics",
-        "Celeb-DF-v1": "datasets/Celeb-DF-v1",
-        "Celeb-DF-v2": "datasets/Celeb-DF-v2",
-        "WildDeepfake": "datasets/WildDeepfake",
-        "StableDiffusion": "datasets/StableDiffusion",
+        domain: f"{args.data_root}/{domain}"
+        for domain in args.domains
     }
     
     # Filter to existing domains
@@ -171,7 +168,7 @@ def train_simple():
         
         if auc > best_auc:
             best_auc = auc
-            torch.save(model.state_dict(), "checkpoints/simple_best.pt")
+            torch.save(model.state_dict(), args.save_path)
             print(f"  [*] New best AUC: {auc:.4f}")
     
     print(f"\n{'='*50}")
@@ -180,4 +177,15 @@ def train_simple():
 
 
 if __name__ == "__main__":
-    train_simple()
+    import argparse
+    parser = argparse.ArgumentParser(description="Simplified CLIP deepfake training")
+    parser.add_argument("--data_root", type=str, default="datasets")
+    parser.add_argument("--domains", type=str, nargs="+",
+                        default=["FaceForensics", "Celeb-DF-v1", "Celeb-DF-v2", "WildDeepfake", "StableDiffusion"])
+    parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--save_path", type=str, default="checkpoints/simple_best.pt")
+    
+    args = parser.parse_args()
+    train_simple(args)
