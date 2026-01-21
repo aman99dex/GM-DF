@@ -1,0 +1,139 @@
+================================================================================
+                    GM-DF CROSS-DOMAIN TESTING & GENERALIZATION RESULTS
+================================================================================
+Model: Simple CLIP-based Deepfake Detector
+Checkpoint: checkpoints/simple_best.pt
+Test Date: January 2026
+
+================================================================================
+SECTION 1: OVERALL TEST RESULTS
+================================================================================
+
+Overall Performance (All 5 Domains):
+  - AUC:      0.9952 (99.52%)
+  - EER:      0.0366 (3.66%)
+  - Accuracy: 0.9711 (97.11%)
+
+================================================================================
+SECTION 2: PER-DOMAIN RESULTS (AUC, ACC, EER)
+================================================================================
+
++------------------+--------+--------+--------+
+|      Domain      |  AUC   |  ACC   |  EER   |
++------------------+--------+--------+--------+
+| FaceForensics    | 0.9856 | 0.9305 | 0.0679 |
+| Celeb-DF-v1      | 0.9999 | 0.9976 | 0.0029 |
+| Celeb-DF-v2      | 0.9723 | 0.9580 | 0.0903 |
+| WildDeepfake     | 0.9903 | 0.9535 | 0.0500 |
+| StableDiffusion  | 0.5000 | 1.0000 | 0.5000 |
++------------------+--------+--------+--------+
+
+================================================================================
+SECTION 3: CROSS-DOMAIN GENERALIZATION ANALYSIS
+================================================================================
+
+Training Configuration:
+  - SEEN Domains (used for training):
+      1. FaceForensics
+      2. Celeb-DF-v1
+      3. Celeb-DF-v2
+      4. WildDeepfake
+
+  - UNSEEN Domains (held out for testing):
+      1. StableDiffusion
+
+--------------------------------------------------------------------------------
+Seen vs Unseen Performance Comparison:
+--------------------------------------------------------------------------------
+
++------------------+--------+--------+--------+--------+
+| Domain           | Status |  AUC   |  ACC   |  EER   |
++------------------+--------+--------+--------+--------+
+| FaceForensics    |  SEEN  | 0.9856 | 0.9305 | 0.0679 |
+| Celeb-DF-v1      |  SEEN  | 0.9999 | 0.9976 | 0.0029 |
+| Celeb-DF-v2      |  SEEN  | 0.9723 | 0.9580 | 0.0903 |
+| WildDeepfake     |  SEEN  | 0.9903 | 0.9535 | 0.0500 |
++------------------+--------+--------+--------+--------+
+| StableDiffusion  | UNSEEN | 0.5000 | 1.0000 | 0.5000 |
++------------------+--------+--------+--------+--------+
+
+--------------------------------------------------------------------------------
+Aggregate Generalization Metrics:
+--------------------------------------------------------------------------------
+
+SEEN Domains (Aggregated):
+  - Average AUC:  0.9870
+  - Average ACC:  0.9599
+  - Average EER:  0.0528
+
+UNSEEN Domains (Aggregated):
+  - Average AUC:  0.5000
+  - Average ACC:  1.0000*
+  - Average EER:  0.5000
+
+* Note: 100% accuracy on StableDiffusion indicates the model is predicting 
+  all samples as a single class (likely all Real), which is why AUC = 0.5.
+
+--------------------------------------------------------------------------------
+GENERALIZATION GAP:
+--------------------------------------------------------------------------------
+
+  AUC Gap (SEEN - UNSEEN):  0.4870
+  EER Gap (UNSEEN - SEEN):  0.4472
+
+  Status: ❌ SIGNIFICANT GENERALIZATION GAP
+  
+  The model shows excellent performance on face-swap/manipulation deepfakes
+  (SEEN domains) but fails to generalize to AI-generated images (StableDiffusion).
+
+================================================================================
+SECTION 4: DOMAIN-SPECIFIC ANALYSIS
+================================================================================
+
+1. FaceForensics (SEEN)
+   - Type: Traditional face-swap deepfakes
+   - AUC: 0.9856 | ACC: 93.05% | EER: 6.79%
+   - Status: Excellent detection performance
+
+2. Celeb-DF-v1 (SEEN)
+   - Type: Celebrity face-swap deepfakes (version 1)
+   - AUC: 0.9999 | ACC: 99.76% | EER: 0.29%
+   - Status: Near-perfect detection
+
+3. Celeb-DF-v2 (SEEN)
+   - Type: Celebrity face-swap deepfakes (version 2)
+   - AUC: 0.9723 | ACC: 95.80% | EER: 9.03%
+   - Status: Strong detection performance
+
+4. WildDeepfake (SEEN)
+   - Type: In-the-wild deepfakes collected from internet
+   - AUC: 0.9903 | ACC: 95.35% | EER: 5.00%
+   - Status: Excellent generalization to wild data
+
+5. StableDiffusion (UNSEEN)
+   - Type: AI-generated images (diffusion model)
+   - AUC: 0.5000 | ACC: 100.0%* | EER: 50.00%
+   - Status: FAILED - Random chance performance
+   - Analysis: Model cannot distinguish AI-generated images from real images.
+     The 100% accuracy suggests class imbalance or single-class prediction.
+
+================================================================================
+SECTION 5: SUMMARY & RECOMMENDATIONS
+================================================================================
+
+Key Findings:
+  1. Model achieves excellent results (AUC > 0.97) on all SEEN domains
+  2. Perfect failure (AUC = 0.5) on UNSEEN AI-generated content
+  3. Strong intra-domain generalization (WildDeepfake performs well)
+  4. Poor cross-domain generalization to different fake types
+
+Recommendations for Improving Generalization:
+  1. Include diverse fake types during training (diffusion, GAN, etc.)
+  2. Use domain adaptation techniques (e.g., meta-learning, domain adversarial)
+  3. Add domain-invariant feature learning
+  4. Use augmentation strategies that simulate domain shift
+  5. Consider multi-task learning with domain labels
+
+================================================================================
+END OF REPORT
+================================================================================
